@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Cbox\Id\Spatie;
 
 use Cbox\Id\AccessControl\Contracts\AccessChecker;
+use Cbox\Id\AccessControl\Contracts\GroupRoleMappings;
 use Cbox\Id\AccessControl\Contracts\Roles;
+use Cbox\Id\Kernel\Events\EventDelivered;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -38,5 +41,23 @@ class SpatieServiceProvider extends ServiceProvider
 
         $this->app->singleton(AccessChecker::class, SpatieAccessChecker::class);
         $this->app->singleton(Roles::class, SpatieRoles::class);
+        $this->app->singleton(GroupRoleMappings::class, SpatieGroupRoleMappings::class);
+
+        // The bridge's mapping + pushed-grant ledger tables. The platform's equivalents
+        // are gated off in this mode.
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        if ($this->app->runningInConsole()) {
+            $this->publishes([
+                __DIR__.'/../database/migrations' => database_path('migrations'),
+            ], 'id-spatie-migrations');
+        }
+
+        // Reconcile group→role grants when a directory group's membership changes.
+        // The platform's own listener is registered only under the builtin driver, so
+        // the bridge supplies its own here.
+        Event::listen(EventDelivered::class, function (EventDelivered $delivered): void {
+            $this->app->make(ReconcileGroupRoles::class)->handle($delivered);
+        });
     }
 }

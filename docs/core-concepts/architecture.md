@@ -39,6 +39,12 @@ and assign roles:
 | `assignmentsForSubject()` | the subject's roles in the team |
 | `assignmentsInOrganization()` | the `model_has_roles` pivot for the team |
 
+## The directory bridge — `GroupRoleMappings`
+
+`SpatieGroupRoleMappings` maps SCIM/directory groups onto Spatie roles and reconciles
+the derived grants as membership changes, keeping its own mapping table and a ledger of
+the grants it made. See [group→role mapping](group-role-mapping.md).
+
 ### Model carriers
 
 The `Roles` contract returns the platform's own `Role` and `RoleAssignment` Eloquent
@@ -48,9 +54,10 @@ models. Those tables do not exist under the external driver, so the adapter retu
 carriers are never saved. A role id is the Spatie role's primary key rendered as a
 string, so it round-trips back to `grantPermission`/`assign`/`unassign`.
 
-Spatie tracks no *grant source*, so every assignment is reported as `manual`. Access
-governance uses this only for display and enumeration, so certification campaigns and
-Segregation-of-Duties scans work; the source column just always reads `manual`.
+Spatie tracks no *grant source* of its own, so the directory bridge's ledger supplies
+it: an assignment recorded there is reported as `pushed`, anything else as `manual`.
+That is what access-governance campaigns display, and it is what makes reconciliation
+safe (see [group→role mapping](group-role-mapping.md)).
 
 ## Organizations and Spatie teams
 

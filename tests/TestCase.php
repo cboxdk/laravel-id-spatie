@@ -9,6 +9,7 @@ use Cbox\Id\Spatie\SpatieServiceProvider;
 use Cbox\Id\Spatie\Tests\Fixtures\User;
 use Cbox\Ssrf\SsrfServiceProvider;
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
 use Orchestra\Testbench\TestCase as BaseTestCase;
 use Spatie\Permission\PermissionServiceProvider;
@@ -26,6 +27,12 @@ abstract class TestCase extends BaseTestCase
         // Spatie's own permission tables. The platform's RBAC tables are gated off by
         // the external driver, so Spatie's `roles`/`permissions` own those names.
         $this->loadMigrationsFrom(dirname(__DIR__).'/vendor/cboxdk/laravel-id/database/publishable');
+
+        // Everything the providers register: the platform's own tables (including the
+        // directory/SCIM tables the bridge reconciles against) and this package's
+        // mapping + pushed-ledger tables. The platform's RBAC migrations stay gated off
+        // by the external driver, so Spatie owns roles/permissions.
+        $this->artisan('migrate')->run();
 
         $stub = dirname(__DIR__).'/vendor/spatie/laravel-permission/database/migrations/create_permission_tables.php.stub';
         (require $stub)->up();
@@ -71,6 +78,84 @@ abstract class TestCase extends BaseTestCase
         $app['config']->set('id-spatie.user_model', User::class);
         $app['config']->set('id-spatie.teams', $this->teams);
         $app['config']->set('permission.teams', $this->teams);
+    }
+
+    /**
+     * Create a directory (a SCIM connection) owned by an organization.
+     */
+    protected function makeDirectory(string $organizationId, string $id = 'dir_1'): string
+    {
+        DB::table('directories')->insert([
+            'id' => $id,
+            'environment_id' => 'env_test',
+            'organization_id' => $organizationId,
+            'name' => 'Test directory',
+            'bearer_token_hash' => hash('sha256', $id),
+            'status' => 'active',
+            'mappings' => '{}',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $id;
+    }
+
+    /**
+     * Create a directory group inside a directory.
+     */
+    protected function makeGroup(string $directoryId, string $id = 'grp_1', string $name = 'Engineering'): string
+    {
+        DB::table('directory_groups')->insert([
+            'id' => $id,
+            'environment_id' => 'env_test',
+            'directory_id' => $directoryId,
+            'external_id' => $id,
+            'display_name' => $name,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $id;
+    }
+
+    /**
+     * Link a platform user into a directory group as an active member.
+     */
+    protected function addGroupMember(string $directoryId, string $groupId, string $userId, bool $active = true): string
+    {
+        $directoryUserId = 'du_'.$userId;
+
+        DB::table('directory_users')->insert([
+            'id' => $directoryUserId,
+            'environment_id' => 'env_test',
+            'directory_id' => $directoryId,
+            'external_id' => $directoryUserId,
+            'resource' => '{}',
+            'user_id' => $userId,
+            'active' => $active,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('directory_group_members')->insert([
+            'group_id' => $groupId,
+            'directory_user_id' => $directoryUserId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $directoryUserId;
+    }
+
+    /**
+     * Remove a subject from a directory group (membership only; the link survives).
+     */
+    protected function removeGroupMember(string $groupId, string $userId): void
+    {
+        DB::table('directory_group_members')
+            ->where('group_id', $groupId)
+            ->where('directory_user_id', 'du_'.$userId)
+            ->delete();
     }
 
     /**

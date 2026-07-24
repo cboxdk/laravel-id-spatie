@@ -36,6 +36,8 @@ class SpatieRoles implements Roles
     use ResolvesOrganizationTeam;
     use ResolvesSpatieSubject;
 
+    public function __construct(private readonly PushedAssignmentLedger $ledger) {}
+
     public function define(?string $organizationId, string $name, ?string $description = null, ?string $clientId = null): PlatformRole
     {
         return $this->withOrganizationTeam($organizationId, function () use ($organizationId, $name): PlatformRole {
@@ -69,6 +71,15 @@ class SpatieRoles implements Roles
         return $this->withOrganizationTeam($organizationId, function () use ($organizationId, $userId, $roleId, $source): RoleAssignment {
             $role = $this->findRole($roleId);
             $subject = $this->resolveSubject($userId) ?? throw UnknownSubject::make($userId);
+
+            // A directory-derived grant is recorded in the ledger, since Spatie itself
+            // cannot say WHY a role is held. Note whether the subject already held it,
+            // so revoking the push later cannot strip an underlying manual grant.
+            if ($source === GrantSource::Pushed) {
+                $alreadyHeld = $subject->roles()->where($role->getQualifiedKeyName(), $role->getKey())->exists();
+                $this->ledger->record($organizationId, $userId, $roleId, $alreadyHeld);
+            }
+
             $subject->assignRole($role);
 
             return $this->assignmentCarrier($userId, $roleId, $organizationId, $source);
@@ -77,9 +88,14 @@ class SpatieRoles implements Roles
 
     public function unassign(string $organizationId, string $userId, string $roleId): void
     {
-        $this->withOrganizationTeam($organizationId, function () use ($userId, $roleId): void {
+        $this->withOrganizationTeam($organizationId, function () use ($organizationId, $userId, $roleId): void {
             $subject = $this->resolveSubject($userId);
-            $subject?->removeRole($this->findRole($roleId));
+
+            // Forgetting the push reports whether the role itself should go: a manual
+            // grant underneath a revoked push survives.
+            if ($this->ledger->forget($organizationId, $userId, $roleId)) {
+                $subject?->removeRole($this->findRole($roleId));
+            }
         });
     }
 
@@ -95,7 +111,8 @@ class SpatieRoles implements Roles
             $assignments = [];
 
             foreach ($subject->roles()->get() as $role) {
-                $assignments[] = $this->assignmentCarrier($userId, $this->stringifyId($role->getKey()), $organizationId, GrantSource::Manual);
+                $roleId = $this->stringifyId($role->getKey());
+                $assignments[] = $this->assignmentCarrier($userId, $roleId, $organizationId, $this->sourceOf($organizationId, $userId, $roleId));
             }
 
             return $assignments;
@@ -116,16 +133,30 @@ class SpatieRoles implements Roles
             $assignments = [];
 
             foreach ($query->get() as $row) {
+                $subjectId = $this->stringifyId($row->subject_id ?? null);
+                $roleId = $this->stringifyId($row->role_id ?? null);
+
                 $assignments[] = $this->assignmentCarrier(
-                    $this->stringifyId($row->subject_id ?? null),
-                    $this->stringifyId($row->role_id ?? null),
+                    $subjectId,
+                    $roleId,
                     $organizationId,
-                    GrantSource::Manual,
+                    $this->sourceOf($organizationId, $subjectId, $roleId),
                 );
             }
 
             return $assignments;
         });
+    }
+
+    /**
+     * Where a held role came from. Spatie records no origin, so the ledger is the only
+     * thing that can distinguish a directory-pushed grant from an admin's.
+     */
+    private function sourceOf(string $organizationId, string $userId, string $roleId): GrantSource
+    {
+        return $this->ledger->has($organizationId, $userId, $roleId)
+            ? GrantSource::Pushed
+            : GrantSource::Manual;
     }
 
     private function findRole(string $roleId): SpatieRoleContract

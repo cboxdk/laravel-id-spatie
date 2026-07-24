@@ -30,6 +30,10 @@ no table collision.
   `define`/`grantPermission`/`assign`/`unassign` drive into Spatie; the read-backs
   (`assignmentsForSubject`, `assignmentsInOrganization`) return the platform's
   contract shapes so governance campaigns and Segregation-of-Duties scans work.
+- **`SpatieGroupRoleMappings`** — the SCIM directory-group→role bridge. Map a directory
+  group onto a role and the grant is kept in sync as membership changes, driven by the
+  platform's `directory.group.membership_changed` event. A ledger of the grants the
+  bridge made means reconciliation **never revokes a manually granted role**.
 - **Organization scoping** — with Spatie's teams feature on, each platform
   organization maps onto a Spatie team, so a role is scoped to the organization it was
   granted in. With teams off the backend is flat and the organization is ignored.
@@ -71,9 +75,12 @@ See [`docs/`](docs/index.md) for the full guide.
 - The host's authorizable model must be keyed by the same identifier Cbox ID uses for
   a subject (the shared users table) — that id is how a platform check finds the Spatie
   user.
-- Spatie tracks no *grant source*, so every assignment the adapter reports to
-  governance is `manual`. The SCIM directory-group→role bridge (`GroupRoleMappings`)
-  is not shipped here; bind your own if you drive group-mapped provisioning.
+- Spatie tracks no *grant source* of its own; this package supplies it from the
+  directory bridge's ledger (`pushed` when the bridge granted it, `manual` otherwise).
+  A role granted directly in Spatie reads as `manual` — the safe direction, since
+  reconciliation never revokes it.
+- Mapping `priority` is stored and orders `forOrganization()`, but mappings union: a
+  role is granted whenever any mapped group matches.
 - Custom Spatie role/permission model classes are not auto-resolved; the adapter uses
   Spatie's default models.
 

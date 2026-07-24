@@ -37,11 +37,13 @@ spatie/laravel-permission.
 - **No hierarchy roll-down.** The platform's ancestor-org roll-down is a builtin-driver
   feature; a flat or team-scoped Spatie backend does not model it. Compose it yourself
   in a custom `AccessChecker` if required.
-- **No grant-source fidelity.** Spatie does not record why a role was granted, so every
-  assignment is reported to governance as `manual`.
-- **No group→role bridge.** `GroupRoleMappings` is not implemented here; it stays
-  deny-by-default (fails loud) until you bind your own. See
-  [custom group→role mapping](../extension-points/custom-group-role-mappings.md).
+- **Grant source comes from this package's ledger, not Spatie.** Spatie records no
+  origin, so a grant is reported as `pushed` only if the directory bridge made it. A
+  role granted directly in Spatie (bypassing the `Roles` contract) is indistinguishable
+  from an admin's manual grant — which is the safe direction: reconciliation will never
+  revoke it.
+- **Priority is ordering only.** `priority` orders `forOrganization()`; a role is
+  granted whenever any mapped group matches, so mappings union rather than override.
 - **Default Spatie models only.** Custom role/permission model classes are not
   auto-resolved.
 

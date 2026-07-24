@@ -1,45 +1,62 @@
 ---
-title: Custom group→role mapping
-description: Add the SCIM directory-group→role bridge this package does not ship
+title: Customizing the group→role bridge
+description: How the shipped directory-group→role bridge works and how to replace it
 weight: 31
 ---
 
-# Custom group→role mapping
+# Customizing the group→role bridge
 
-Cbox ID's `GroupRoleMappings` contract is the bridge from SCIM/directory groups to
-roles: it maps a directory group onto a role and reconciles the derived (`pushed`)
-assignments as group membership changes. This package **does not** ship a Spatie
-implementation of it — most adopters assign roles directly rather than through
-group-mapping, and a faithful bridge needs its own store for the mappings plus a
-reconciliation strategy against Spatie.
+This package ships a working `GroupRoleMappings` implementation
+(`SpatieGroupRoleMappings`), so SCIM directory groups map onto Spatie roles out of the
+box — see [group→role mapping](../core-concepts/group-role-mapping.md) for how to use
+it.
 
-Under the external driver, with only this package installed, `GroupRoleMappings` stays
-bound to the platform's deny-by-default `UnboundGroupRoleMappings`, which throws
-`ExternalRbacNotBound` on any call — so SCIM group→role sync fails loud rather than
-silently doing nothing.
+You only need this page if you want to **replace** it.
 
-## Adding it
+## Why you might replace it
 
-Implement the contract against your own mapping store plus Spatie, and bind it in a
-provider that loads after this package's:
+- Your directory groups should map onto something other than a flat Spatie role (a
+  permission set, an external policy service).
+- You need priority semantics beyond ordering (the shipped bridge stores `priority` and
+  orders `forOrganization()` by it, but a role is granted whenever *any* mapped group
+  matches).
+- You want reconciliation to run somewhere other than the domain-event listener — for
+  example batched on a schedule.
+
+## Replacing it
+
+Implement `Cbox\Id\AccessControl\Contracts\GroupRoleMappings` and bind it in a provider
+that loads after this package's:
 
 ```php
 use Cbox\Id\AccessControl\Contracts\GroupRoleMappings;
 
 public function boot(): void
 {
-    $this->app->singleton(GroupRoleMappings::class, \App\Identity\SpatieGroupRoleMappings::class);
+    $this->app->singleton(GroupRoleMappings::class, \App\Identity\MyGroupRoleMappings::class);
 }
 ```
 
-Your implementation:
+The contract has five methods: `map`, `unmap`, `forOrganization`, `reconcileUser`, and
+`reconcileGroup`.
 
-- Stores group→role mappings (a table you own), keyed by organization + group.
-- On `reconcileUser` / `reconcileGroup`, reads the user's current directory-group
-  membership (from Cbox ID's Directory module), computes the mapped roles, and
-  grants/revokes only the derived assignments in Spatie — never disturbing a manually
-  assigned role.
+## The one thing you must get right
 
-Until then, assign roles directly through the `Roles` contract (the `SpatieRoles`
-adapter this package binds), which SCIM's user-provisioning path and the console both
-use.
+Spatie records **no grant origin** — a role is either held or not. So a replacement
+must keep its own record of which grants *it* made, or reconciliation will strip roles
+an admin granted by hand. The shipped bridge does this with a ledger table
+(`id_spatie_pushed_assignments`), including a `pre_existing` flag for a role the subject
+already held when a push landed, so revoking the push leaves the manual grant intact.
+
+If you replace the bridge, replicate that property — and test it. The shipped suite
+covers the three cases worth copying:
+
+- a manually granted role survives a full reconcile after the subject leaves the group;
+- a push that duplicated an existing manual grant leaves the role in place when revoked;
+- an admin can still revoke a manual grant directly.
+
+## Disabling it entirely
+
+If you do not use SCIM group mapping, simply never call `map()`. The bridge is inert
+until a mapping exists: reconciliation over a group with no mappings grants and revokes
+nothing.
