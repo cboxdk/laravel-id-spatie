@@ -11,7 +11,7 @@ permissions:
 jobs:
   qa:
     name: PHP ${{ matrix.php }} · Testbench ${{ matrix.testbench }}
-    runs-on: [self-hosted, linux, x64, cbox]
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
