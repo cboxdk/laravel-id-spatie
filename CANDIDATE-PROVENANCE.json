@@ -1,0 +1,9 @@
+{
+  "upstream_head": "2f5b85d026abd7010b8815e1f54ee1ad52232247",
+  "upstream_branch": "main",
+  "target_version": "0.3.0",
+  "status": "unpublished candidate based on actual upstream history",
+  "source_manifest": "evidence/laravel-id-spatie-final-source-hashes.json",
+  "publication_parent": "2f5b85d026abd7010b8815e1f54ee1ad52232247",
+  "restored_public_files": []
+}

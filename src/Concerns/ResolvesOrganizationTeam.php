@@ -9,8 +9,8 @@ use Spatie\Permission\PermissionRegistrar;
 /**
  * Runs a piece of work with Spatie's team context pinned to a platform organization,
  * so roles, permissions, and assignments are scoped to the organization they belong
- * to. When the teams feature is off the organization is ignored (a flat, single-tenant
- * backend) and the callback runs unchanged.
+ * to. Tenant operations require both team switches. Environment-only operations do not
+ * project a native assignment and may run without teams.
  */
 trait ResolvesOrganizationTeam
 {
@@ -39,6 +39,6 @@ trait ResolvesOrganizationTeam
 
     private function teamsEnabled(): bool
     {
-        return (bool) config('id-spatie.teams', false);
+        return config('id-spatie.teams', false) === true && config('permission.teams', false) === true;
     }
 }

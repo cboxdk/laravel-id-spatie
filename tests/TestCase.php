@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Cbox\Id\Spatie\Tests;
 
 use Cbox\Id\IdServiceProvider;
+use Cbox\Id\Kernel\Tenancy\Contracts\EnvironmentContext;
+use Cbox\Id\Kernel\Tenancy\GenericEnvironment;
+use Cbox\Id\OAuthServer\Models\Client;
 use Cbox\Id\Spatie\SpatieServiceProvider;
 use Cbox\Id\Spatie\Tests\Fixtures\User;
 use Cbox\Ssrf\SsrfServiceProvider;
@@ -19,7 +22,7 @@ abstract class TestCase extends BaseTestCase
     /**
      * Whether Spatie's teams feature (and org→team scoping) is on for this case.
      */
-    protected bool $teams = false;
+    protected bool $teams = true;
 
     protected function defineDatabaseMigrations(): void
     {
@@ -36,6 +39,8 @@ abstract class TestCase extends BaseTestCase
 
         $stub = dirname(__DIR__).'/vendor/spatie/laravel-permission/database/migrations/create_permission_tables.php.stub';
         (require $stub)->up();
+        app(EnvironmentContext::class)->set(GenericEnvironment::of('env_test'));
+        Client::query()->create(['environment_id' => 'env_test', 'id' => 'client_1', 'client_id' => 'client_1', 'name' => 'Test app', 'redirect_uris' => ['https://app.test/callback'], 'grant_types' => ['authorization_code']]);
     }
 
     /**
@@ -43,6 +48,8 @@ abstract class TestCase extends BaseTestCase
      */
     protected function getPackageProviders($app): array
     {
+        $app['config']->set('cbox-id.access_control.driver', 'external');
+
         // SpatieServiceProvider is registered last so its boot() rebinds the platform
         // contracts after the platform's own AccessControl provider has run.
         return [

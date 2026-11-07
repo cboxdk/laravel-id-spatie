@@ -4,73 +4,43 @@ description: The contracts the adapter implements and how they map onto Spatie
 weight: 21
 ---
 
-# Architecture
+# Authorization architecture
 
-Cbox ID resolves all authorization through two contracts. This package implements both
-against spatie/laravel-permission and binds them under the external driver.
+`id_spatie_roles` stores environment, organization, app, staff status and readable
+names, linking each role to a unique native Spatie role. `id_spatie_assignments`
+stores explicit tenant grants; `id_spatie_everywhere_assignments` stores explicit
+environment-wide grants. All three use ID environment scopes.
 
-## The read path — `AccessChecker`
+Tenant claims require both a managed grant and its live native team assignment.
+Environment grants use the explicit adapter ledger plus the live managed native
+role's permissions; they are not projected to arbitrary future teams. Legacy native
+roles, direct permissions and forged native assignments contribute nothing to ID.
 
-`SpatieAccessChecker` answers the platform's authorization questions and supplies token
-claims:
+`assignmentsForSubject` returns role ID strings. Organization/environment assignment
+enumerators return models. Grant changes and role lifecycle changes emit ID events
+and audit records in the write transaction. Definition locks precede assignment
+locks; manual grants survive pushed-source revocation independently.
 
-| Contract method | Spatie source |
-|---|---|
-| `can($userId, $permission, $org)` | `hasPermissionTo()` (unknown permission → deny, not error) |
-| `permissionsFor($userId, $org)` | `getAllPermissions()` — direct **and** role-derived |
-| `forToken($userId, $org, $client)` | `getRoleNames()` + `getAllPermissions()` |
+Both team configuration flags must be true for tenant access. Flat tenant reads
+deny and writes fail. Unknown or cross-environment clients are refused. Per-app
+claims filter other apps' roles; coarse `can`/`permissionsFor` do not.
 
-`forToken()` is what the OAuth/OIDC token issuer and the UserInfo endpoint call, so
-your Spatie roles and permissions land in the tokens the platform mints. The
-`clientId` is not used — a single Spatie backend is not partitioned per app, so the
-token carries the subject's full effective set.
+External manifest ingestion, staging/activation and hierarchy are host-owned. The
+adapter does not register builtin manifest machinery or collide with Spatie tables.
+See the [upgrade guide](../getting-started/scoped-authorization-upgrade.md).
 
-## The write path — `Roles`
+## Concurrent grants and reconciliation failures
 
-`SpatieRoles` is what SCIM provisioning and the access-governance module call to author
-and assign roles:
+A persistent environment/subject mutex serializes every grant and revocation before
+role and assignment locks. This includes different-role grants, so two concurrent
+requests cannot both pass a segregation-of-duties check against the same old state.
+No lock assumes the host uses ID's default User model. Role deletion takes the role
+lock and removes its grants internally without acquiring subject locks in reverse.
 
-| Contract method | Spatie action |
-|---|---|
-| `define()` | `Role::findOrCreate()` |
-| `grantPermission()` | `Role::givePermissionTo(Permission::findOrCreate())` |
-| `assign()` / `unassign()` | `assignRole()` / `removeRole()` on the subject |
-| `assertAssignableIn()` | resolve the role, else `UnknownRole` |
-| `assignmentsForSubject()` | the subject's roles in the team |
-| `assignmentsInOrganization()` | the `model_has_roles` pivot for the team |
-
-## The directory bridge — `GroupRoleMappings`
-
-`SpatieGroupRoleMappings` maps SCIM/directory groups onto Spatie roles and reconciles
-the derived grants as membership changes, keeping its own mapping table and a ledger of
-the grants it made. See [group→role mapping](group-role-mapping.md).
-
-### Model carriers
-
-The `Roles` contract returns the platform's own `Role` and `RoleAssignment` Eloquent
-models. Those tables do not exist under the external driver, so the adapter returns
-**unsaved** instances as typed carriers of the fields the platform reads — `id`,
-`name`, `user_id`, `role_id`, `organization_id`, `source`. Spatie owns persistence; the
-carriers are never saved. A role id is the Spatie role's primary key rendered as a
-string, so it round-trips back to `grantPermission`/`assign`/`unassign`.
-
-Spatie tracks no *grant source* of its own, so the directory bridge's ledger supplies
-it: an assignment recorded there is reported as `pushed`, anything else as `manual`.
-That is what access-governance campaigns display, and it is what makes reconciliation
-safe (see [group→role mapping](group-role-mapping.md)).
-
-## Organizations and Spatie teams
-
-Cbox ID is hierarchy-aware and passes an `organizationId` on every call. How the
-adapter uses it depends on `id-spatie.teams`:
-
-- **Teams on** — each organization maps onto a Spatie team (the org id *is* the team
-  id). Before every read and write the adapter pins Spatie's team context to the
-  organization, so a role or assignment is scoped to the organization it belongs to and
-  never leaks across organizations.
-- **Teams off** — the backend is flat; the organization id is ignored (single-tenant).
-
-The platform's *hierarchy roll-down* (a role in an ancestor org applying to
-descendants) is a feature of the builtin driver; a flat Spatie backend does not model
-it. If you need it, implement it in a custom `AccessChecker` that composes the
-ancestor walk with Spatie lookups.
+Directory mapping policy writes commit before per-subject reconciliation. Each
+subject's derived grants change transactionally under its mutex. Errors propagate;
+a failed operation is not reported as successful. After a failed unmap, the pushed
+ledger retains every unrevoked holder even if the mapping or group membership is
+already gone. Retrying the same unmap enumerates those holders and converges. Hosts
+must retry failed reconciliation jobs/requests; until retry succeeds, a failed
+revocation remains an outstanding operation, not a completed access removal.

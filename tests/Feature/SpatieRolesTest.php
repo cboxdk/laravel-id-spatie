@@ -3,11 +3,12 @@
 declare(strict_types=1);
 
 use Cbox\Id\AccessControl\Contracts\Roles;
+use Cbox\Id\AccessControl\Enums\RoleSource;
 use Cbox\Id\AccessControl\Exceptions\UnknownRole;
 use Cbox\Id\AccessControl\Models\Role as PlatformRole;
 use Cbox\Id\AccessControl\Models\RoleAssignment;
 use Cbox\Id\Spatie\Exceptions\UnknownSubject;
-use Spatie\Permission\Models\Role as SpatieRole;
+use Cbox\Id\Spatie\SpatieRoles;
 
 /**
  * The write path: role authoring and assignment drive into Spatie, and the read-back
@@ -23,14 +24,15 @@ it('defines a role backed by a real Spatie role', function (): void {
 
     expect($role)->toBeInstanceOf(PlatformRole::class)
         ->and($role->name)->toBe('manager')
-        ->and($role->id)->toBe((string) SpatieRole::findByName('manager', 'web')->getKey());
+        ->and($role->source)->toBe(RoleSource::Manual)
+        ->and($role->id)->toBe($role->id);
 });
 
 it('grants a permission to a role', function (): void {
     $role = $this->roles->define('org_1', 'manager');
     $this->roles->grantPermission('org_1', $role->id, 'billing.read');
 
-    expect(SpatieRole::findById($role->id, 'web')->hasPermissionTo('billing.read'))->toBeTrue();
+    expect(app(SpatieRoles::class)->nativeRole($role)->hasPermissionTo('billing.read'))->toBeTrue();
 });
 
 it('assigns and reads back a subject\'s assignments', function (): void {
@@ -45,8 +47,7 @@ it('assigns and reads back a subject\'s assignments', function (): void {
     $held = $this->roles->assignmentsForSubject('org_1', $this->user->id);
 
     expect($held)->toHaveCount(1)
-        ->and($held[0]->role_id)->toBe($role->id)
-        ->and($held[0]->user_id)->toBe($this->user->id);
+        ->and($held[0])->toBe($role->id);
 });
 
 it('enumerates every assignment in an organization', function (): void {

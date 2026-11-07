@@ -6,7 +6,7 @@ weight: 22
 
 # Directory group → role mapping
 
-The bridge maps a SCIM/directory group onto a Spatie role: everyone in the group holds
+The bridge maps a SCIM/directory group onto an explicitly managed ID role projected into Spatie: everyone in the group holds
 the role, and the grant is kept in sync as membership changes.
 
 ```php
@@ -67,3 +67,5 @@ equivalents are gated off under the external driver):
 
 `priority` is stored and orders `forOrganization()`; a role is granted whenever any
 mapped group matches.
+
+Mappings are environment-scoped and tenant-only: staff roles and groups owned by another organization/environment are refused. Legacy NULL-environment mappings are quarantined. `assignmentsForSubject` returns role ID strings; use `assignmentsInOrganization` for assignment models and grant sources.

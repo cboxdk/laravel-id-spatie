@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Id\Spatie;
 
+use Cbox\Id\Kernel\Tenancy\Contracts\EnvironmentContext;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -22,8 +23,8 @@ class PushedAssignmentLedger
 
     public function record(string $organizationId, string $userId, string $roleId, bool $preExisting): void
     {
-        DB::table(self::TABLE)->updateOrInsert(
-            ['organization_id' => $organizationId, 'user_id' => $userId, 'role_id' => $roleId],
+        DB::table(self::TABLE)->where('environment_id', $this->environmentId())->updateOrInsert(
+            ['environment_id' => $this->environmentId(), 'organization_id' => $organizationId, 'user_id' => $userId, 'role_id' => $roleId],
             ['pre_existing' => $preExisting, 'updated_at' => now(), 'created_at' => now()],
         );
     }
@@ -40,7 +41,7 @@ class PushedAssignmentLedger
      */
     public function forget(string $organizationId, string $userId, string $roleId): bool
     {
-        $row = DB::table(self::TABLE)
+        $row = DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('user_id', $userId)
             ->where('role_id', $roleId)
@@ -50,7 +51,7 @@ class PushedAssignmentLedger
             return true;
         }
 
-        DB::table(self::TABLE)
+        DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('user_id', $userId)
             ->where('role_id', $roleId)
@@ -61,7 +62,7 @@ class PushedAssignmentLedger
 
     public function has(string $organizationId, string $userId, string $roleId): bool
     {
-        return DB::table(self::TABLE)
+        return DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('user_id', $userId)
             ->where('role_id', $roleId)
@@ -75,7 +76,7 @@ class PushedAssignmentLedger
      */
     public function roleIdsFor(string $organizationId, string $userId): array
     {
-        return $this->strings(DB::table(self::TABLE)
+        return $this->strings(DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('user_id', $userId)
             ->pluck('role_id')
@@ -95,7 +96,7 @@ class PushedAssignmentLedger
             return [];
         }
 
-        return $this->strings(DB::table(self::TABLE)
+        return $this->strings(DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->whereIn('role_id', $roleIds)
             ->pluck('user_id')
@@ -112,5 +113,10 @@ class PushedAssignmentLedger
             array_map(static fn (mixed $v): mixed => is_int($v) ? (string) $v : $v, $values),
             'is_string',
         )));
+    }
+
+    private function environmentId(): string
+    {
+        return app(EnvironmentContext::class)->requireEnvironment()->environmentKey();
     }
 }

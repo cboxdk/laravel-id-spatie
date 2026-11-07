@@ -8,6 +8,8 @@ use Cbox\Id\AccessControl\Contracts\GroupRoleMappings;
 use Cbox\Id\AccessControl\Contracts\Roles;
 use Cbox\Id\AccessControl\Enums\GrantSource;
 use Cbox\Id\AccessControl\Models\GroupRoleMapping;
+use Cbox\Id\Kernel\Tenancy\Contracts\EnvironmentContext;
+use Cbox\Id\Spatie\Models\ManagedRole;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -33,37 +35,54 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
 
     public function map(string $organizationId, string $groupId, string $roleId, int $priority = 0): GroupRoleMapping
     {
+        $mapping = DB::transaction(fn (): GroupRoleMapping => $this->mapScoped($organizationId, $groupId, $roleId, $priority));
+        $this->reconcileGroup($groupId, $organizationId);
+
+        return $mapping;
+    }
+
+    private function mapScoped(string $organizationId, string $groupId, string $roleId, int $priority): GroupRoleMapping
+    {
         // Refuse a role this org may not assign BEFORE the mapping row is written, so a
         // bad id fails at the point of the mistake instead of wedging every later sync.
-        $this->roles->assertAssignableIn($organizationId, $roleId);
+        $this->roles->assertTenantAssignable($organizationId, $roleId);
+        if ($this->organizationOf($groupId) !== $organizationId) {
+            throw new \LogicException('The directory group must belong to this organization and environment.');
+        }
 
-        DB::table(self::TABLE)->updateOrInsert(
-            ['organization_id' => $organizationId, 'group_id' => $groupId, 'role_id' => $roleId],
+        DB::table(self::TABLE)->where('environment_id', $this->environmentId())->updateOrInsert(
+            ['environment_id' => $this->environmentId(), 'organization_id' => $organizationId, 'group_id' => $groupId, 'role_id' => $roleId],
             ['priority' => $priority, 'updated_at' => now(), 'created_at' => now()],
         );
-
-        // A mapping change takes effect immediately for everyone in the group.
-        $this->reconcileGroup($groupId, $organizationId);
 
         return $this->carrier($organizationId, $groupId, $roleId, $priority);
     }
 
     public function unmap(string $organizationId, string $groupId, string $roleId): void
     {
-        DB::table(self::TABLE)
+        $this->unmapScoped($organizationId, $groupId, $roleId);
+    }
+
+    private function unmapScoped(string $organizationId, string $groupId, string $roleId): void
+    {
+        $subjects = $this->ledger->subjectsHolding($organizationId, [$roleId]);
+        DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('group_id', $groupId)
             ->where('role_id', $roleId)
             ->delete();
 
         $this->reconcileGroup($groupId, $organizationId);
+        foreach ($subjects as $subject) {
+            $this->reconcileUser($organizationId, $subject);
+        }
     }
 
     public function forOrganization(string $organizationId): array
     {
         $mappings = [];
 
-        $rows = DB::table(self::TABLE)
+        $rows = DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->orderByDesc('priority')
             ->get();
@@ -82,12 +101,20 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
 
     public function reconcileUser(string $organizationId, string $userId): void
     {
+        DB::transaction(function () use ($organizationId, $userId): void {
+            app(SpatieRoles::class)->lockSubject($userId);
+            $this->reconcileScopedUser($organizationId, $userId);
+        });
+    }
+
+    private function reconcileScopedUser(string $organizationId, string $userId): void
+    {
         $groupIds = $this->groupIdsForUser($organizationId, $userId);
 
         // Roles the subject SHOULD hold via the directory.
         $mapped = $groupIds === []
             ? []
-            : $this->strings(DB::table(self::TABLE)
+            : $this->strings(DB::table(self::TABLE)->where('environment_id', $this->environmentId())
                 ->where('organization_id', $organizationId)
                 ->whereIn('group_id', $groupIds)
                 ->pluck('role_id')
@@ -97,12 +124,16 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
         // manual grant).
         $pushed = $this->ledger->roleIdsFor($organizationId, $userId);
 
-        foreach (array_diff($mapped, $pushed) as $roleId) {
-            $this->roles->assign($organizationId, $userId, $roleId, GrantSource::Pushed);
-        }
-
+        // Different subjects can reconcile opposite changes in the same role set.
+        // Lock that entire set in one order before removing obsolete grants, then
+        // evaluate new grants against the resulting state under the subject mutex.
+        $changed = array_values(array_unique([...array_diff($mapped, $pushed), ...array_diff($pushed, $mapped)]));
+        ManagedRole::query()->whereIn('id', $changed)->orderBy('id')->lockForUpdate()->get();
         foreach (array_diff($pushed, $mapped) as $roleId) {
-            $this->roles->unassign($organizationId, $userId, $roleId);
+            app(SpatieRoles::class)->unassignPushed($organizationId, $userId, $roleId);
+        }
+        foreach (array_diff($mapped, $pushed) as $roleId) {
+            $this->roles->assignAsTenant($organizationId, $userId, $roleId, GrantSource::Pushed);
         }
     }
 
@@ -121,7 +152,7 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
         // correct for adds, removals, and group deletion alike, with no delta tracking.
         $currentMembers = $this->memberUserIds($groupId);
 
-        $mappedRoleIds = $this->strings(DB::table(self::TABLE)
+        $mappedRoleIds = $this->strings(DB::table(self::TABLE)->where('environment_id', $this->environmentId())
             ->where('organization_id', $organizationId)
             ->where('group_id', $groupId)
             ->pluck('role_id')
@@ -155,7 +186,7 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
         return $this->strings(DB::table('directory_group_members')
             ->join('directory_users', 'directory_users.id', '=', 'directory_group_members.directory_user_id')
             ->where('directory_group_members.group_id', $groupId)
-            ->where('directory_users.active', true)
+            ->where('directory_users.active', true)->where('directory_users.environment_id', $this->environmentId())
             ->whereNotNull('directory_users.user_id')
             ->pluck('directory_users.user_id')
             ->all());
@@ -173,8 +204,8 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
             ->join('directory_groups', 'directory_groups.id', '=', 'directory_group_members.group_id')
             ->join('directories', 'directories.id', '=', 'directory_groups.directory_id')
             ->where('directory_users.user_id', $userId)
-            ->where('directory_users.active', true)
-            ->where('directories.organization_id', $organizationId)
+            ->where('directory_users.active', true)->where('directory_users.environment_id', $this->environmentId())
+            ->where('directories.organization_id', $organizationId)->where('directories.environment_id', $this->environmentId())->where('directory_groups.environment_id', $this->environmentId())
             ->distinct()
             ->pluck('directory_group_members.group_id')
             ->all());
@@ -184,7 +215,7 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
     {
         $organizationId = DB::table('directory_groups')
             ->join('directories', 'directories.id', '=', 'directory_groups.directory_id')
-            ->where('directory_groups.id', $groupId)
+            ->where('directory_groups.id', $groupId)->where('directories.environment_id', $this->environmentId())->where('directory_groups.environment_id', $this->environmentId())
             ->value('directories.organization_id');
 
         return is_string($organizationId) ? $organizationId : null;
@@ -209,5 +240,10 @@ class SpatieGroupRoleMappings implements GroupRoleMappings
             array_map(fn (mixed $v): string => $this->string($v), $values),
             static fn (string $v): bool => $v !== '',
         )));
+    }
+
+    private function environmentId(): string
+    {
+        return app(EnvironmentContext::class)->requireEnvironment()->environmentKey();
     }
 }

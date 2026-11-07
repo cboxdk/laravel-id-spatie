@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Cbox\Id\Spatie\Concerns;
 
+use Cbox\Id\Kernel\Tenancy\Contracts\EnvironmentContext;
 use Cbox\Id\Spatie\Contracts\SpatieSubject;
 use Cbox\Id\Spatie\Exceptions\MisconfiguredUserModel;
 use Illuminate\Database\Eloquent\Model;
@@ -19,7 +20,7 @@ trait ResolvesSpatieSubject
     {
         $subject = $this->userModelClass()::find($userId);
 
-        if ($subject === null) {
+        if ($subject === null || $subject->getAttribute('environment_id') !== app(EnvironmentContext::class)->requireEnvironment()->environmentKey()) {
             return null;
         }
 

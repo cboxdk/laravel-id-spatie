@@ -17,8 +17,9 @@ return [
      * Whether spatie/laravel-permission's teams feature is enabled. When true, each
      * platform organization maps onto a Spatie team (the team id IS the organization
      * id), so a role or assignment is scoped to the organization it was made in —
-     * matching the platform's per-organization RBAC. When false the backend is flat
-     * and the organization id is ignored (single-tenant).
+     * matching the platform's per-organization RBAC. Both this setting and
+     * permission.teams must be true for tenant operations. Otherwise tenant reads
+     * deny and writes fail; only explicit environment grants are supported.
      */
     'teams' => (bool) env('CBOX_ID_SPATIE_TEAMS', false),
 

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Cbox\Id\Spatie;
 
+use Cbox\Id\AccessControl\AllowAllGrants;
 use Cbox\Id\AccessControl\Contracts\AccessChecker;
+use Cbox\Id\AccessControl\Contracts\GrantGuard;
 use Cbox\Id\AccessControl\Contracts\GroupRoleMappings;
 use Cbox\Id\AccessControl\Contracts\Roles;
 use Cbox\Id\Kernel\Events\EventDelivered;
@@ -37,6 +39,10 @@ class SpatieServiceProvider extends ServiceProvider
 
         if (config('cbox-id.access_control.driver') !== 'external') {
             return;
+        }
+
+        if (! $this->app->bound(GrantGuard::class)) {
+            $this->app->singleton(GrantGuard::class, AllowAllGrants::class);
         }
 
         $this->app->singleton(AccessChecker::class, SpatieAccessChecker::class);

@@ -79,7 +79,7 @@ it('reports a derived grant with the pushed source', function (): void {
     $held = $this->roles->assignmentsForSubject('org_1', $this->user->id);
 
     expect($held)->toHaveCount(1)
-        ->and($held[0]->source)->toBe(GrantSource::Pushed);
+        ->and($this->roles->assignmentsInOrganization('org_1')[0]->source)->toBe(GrantSource::Pushed);
 });
 
 it('lists an organization\'s mappings', function (): void {
